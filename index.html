@@ -568,12 +568,13 @@
 })();
 </script>
 
-<!-- RSS LOADER — AllOrigins como proxy para RSS e imágenes -->
+<!-- RSS LOADER — proxy propio en Vercel con fallback a AllOrigins -->
 <script>
 (function() {
-  const RSS_URL  = 'https://feeds.ivoox.com/feed_fg_f1158506_filtro_1.xml';
-  const PROXY    = url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-  const IMG_PROXY = url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  const RSS_URL   = 'https://feeds.ivoox.com/feed_fg_f1158506_filtro_1.xml';
+  const OWN_PROXY = url => `/api/proxy?url=${encodeURIComponent(url)}`;
+  const FALLBACK  = url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const IMG_PROXY = url => `/api/proxy?url=${encodeURIComponent(url)}`;
   const PAGE_SIZE = 8;
 
   let allEpisodes = [];
@@ -674,19 +675,39 @@
   }
 
   async function loadFeed() {
+    let xmlStr = null;
+
+    // 1. Proxy propio de Vercel (/api/proxy) — funciona en producción y móvil
     try {
-      const res  = await fetch(PROXY(RSS_URL));
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      if (!data.contents) throw new Error('Respuesta vacía de AllOrigins');
+      const res = await fetch(OWN_PROXY(RSS_URL));
+      if (res.ok) {
+        const text = await res.text();
+        if (text.trim().startsWith('<')) xmlStr = text;
+      }
+    } catch(e) { /* no disponible en local, usar fallback */ }
 
-      allEpisodes = parseRSS(data.contents);
-      if (allEpisodes.length === 0) throw new Error('Sin episodios en el feed');
+    // 2. Fallback a AllOrigins para desarrollo local
+    if (!xmlStr) {
+      try {
+        const res  = await fetch(FALLBACK(RSS_URL));
+        const data = await res.json();
+        if (data.contents?.trim().startsWith('<')) xmlStr = data.contents;
+      } catch(e) { /* también falló */ }
+    }
 
+    if (!xmlStr) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-msg').style.display = 'block';
+      return;
+    }
+
+    try {
+      allEpisodes = parseRSS(xmlStr);
+      if (allEpisodes.length === 0) throw new Error('Sin episodios');
       document.getElementById('loading').style.display = 'none';
       renderEpisodes();
     } catch(e) {
-      console.error('Error cargando feed:', e);
+      console.error('Error parseando feed:', e);
       document.getElementById('loading').style.display = 'none';
       document.getElementById('error-msg').style.display = 'block';
     }
